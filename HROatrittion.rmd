@@ -1,0 +1,573 @@
+---
+title: "Atrittion Model - Retención de talento"
+author: "Eduardo Moraga"
+date: "21/3/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+En una economía sana, una cierta cantidad de rotación voluntaria de empleados es normal. Las personas cambian de trabajo por muchas consideraciones: familia, conveniencia, compensación, oportunidades de crecimiento y más. Sin embargo, siempre es bueno comprender la razón detrás del desgaste para que se puedan tomar las medidas adecuadas para evitar la pérdida de talentos.
+
+
+Estamos viviendo tiempos inciertos en muchos aspectos, el trabajo como tal se ha ido trasnformando a los nuevos desafíos. 
+La automatización de funciones a escala exponencial, la uberización de las mismas, la vulnerabilidad a nivel formativo entre otros, hacen que las empresas tengan que considerar una politica robusta de retención de talento. 
+De hecho, cuando se elimina un puesto de trabajo, el que queda muchas veces hace el doble de trabajo evidenciando errores de gestión. Es muy importante que la empresa preprare a los equipos para una optima distribución del trabajo 
+Asimismo, la pandemia hizo tomar medidas a muchas empresas que vieron en la reducción de personal, una alternativa de mitigar los riesgos de la evidente debacle económica. 
+Sin embargo, es sabido que tomar dichas medidas permite mejorar costos asociados a la empresa, pero lo que no se mide de forma recurrente es el costo de de inversión cuando la actividad se recupera. 
+
+1. Los empleados de nivel inicial cuestan del 30% al 50% de su salario anual. 
+
+2. Los empleados de nivel medio cuestan el 150% de su salario anual. 
+
+3. Los empleados especializados o de alto nivel cuestan hasta el 400% de su salario anual. 
+
+Sumado a lo anterior, antes de la pandemia 3 de cada 10 Chilenos renunciaban a su trabajo.
+
+Por qué entonces es importante la rotación?
+
+No se trata solo de recursos monetarios necesarios. También, se debe poner atención a los esfuerzos organizacionales que implica reemplazar a un colaborador.
+1. Costo de reclutamiento y selección.
+2. Entrenamiento y formación.
+3. Perdida de conocimiento. 
+4. Impacto en las relaciones internas y con cliente.
+
+
+Con el objetivo de querer aportar en esta área algunas herramientas que permitan mejorar estos indicadores de gestión, les comparto un desarrollo de cómo implementar algunos algoritmos para la predicción de fuga de colaboradores y una implementación del algoritmo con 30 casos de la base original para evaluar el poder predictivo.
+
+
+```{r, message=FALSE, warning=FALSE, results='hide',include=FALSE}
+r = getOption("repos")
+r["CRAN"] = "http://cran.us.r-project.org"
+options(repos = r)
+paquetes <- c('data.table',
+              'dplyr',
+              'tidyr',
+              'ggplot2',
+              'randomForest',
+              'ROCR',
+              'purrr',
+              'smbinning',
+              'rpart',
+              'rpart.plot',
+              'skirm',
+              'readxl',
+              'rpart',
+              'missForest',
+              'xgboost',
+              'adabag',
+              'PerformanceAnalytics',
+              'corrplot',
+              'Boruta',
+              'e1071',
+              'kernlab',
+              'grid',
+              'Amelia',
+              'nnet',
+              'reshape2',
+              'leaps',
+              'foreign',
+              'pPROC',
+              'caret',
+              'discretization',
+              'DMwR',
+              'corrgram'
+)
+
+instalados <- paquetes %in% installed.packages()
+
+if(sum(instalados == FALSE) > 0) {
+  install.packages(paquetes[!instalados])
+}
+lapply(paquetes,require,character.only = TRUE)
+```
+
+#### Desactiva la notación científica
+
+```{r, message=FALSE, warning=FALSE, results='hide',include=TRUE}
+options(scipen=999)#Desactiva la notación científica
+```
+
+#### Cargar data y revisión inicial
+
+```{r, message=FALSE, warning=FALSE,include=TRUE}
+
+### Cargamos la base de datos
+df <- fread('WA_Fn-UseC_-HR-Employee-Attrition.csv')
+
+#Revisamos inicialmente la calidad de los datos.
+str(df)
+glimpse(df)
+
+```
+
+#### Calidad de los datos:
+Etapa de limpieza y procesamiento de datos para análisis descriptivo inicial
+
+```{r, message=FALSE, warning=TRUE,include=FALSE}
+
+#Guardamos las variables categóricas
+a_factores <- c('Attrition', 'BusinessTravel', 'Department', 'EducationField', 
+                'Gender','JobRole', 
+                'MaritalStatus','OverTime')
+
+```
+
+```{r message=FALSE, warning=TRUE, include=FALSE, paged.print=TRUE}
+#Editamos el dataset con el objetivo de categorizar bien las variables.
+df <- df %>%
+  mutate(Education = as.factor(if_else(Education == 1,"Below College", if_else(Education == 2, "College", if_else(Education == 3, "Bachelor", if_else(Education == 4, "Master","Doctor")))))
+         ,EnvironmentSatisfaction = as.factor(if_else(EnvironmentSatisfaction == 1,"Low",if_else(EnvironmentSatisfaction == 2, "Medium", if_else(EnvironmentSatisfaction == 3, "High", "Very High"))))
+         ,JobInvolvement = as.factor(if_else(JobInvolvement == 1,"Low",if_else(JobInvolvement == 2, "Medium",if_else(JobInvolvement == 3, "High", "Very High"))))
+         ,JobSatisfaction = as.factor(if_else(JobSatisfaction == 1, "Low",if_else(JobSatisfaction == 2, "Medium",if_else(JobSatisfaction == 3, "High","Very High"))))
+         ,PerformanceRating = as.factor(if_else(PerformanceRating == 1, "Low",if_else(PerformanceRating == 2, "Good", if_else(PerformanceRating == 3, "Excellent", "Outstanding"))))
+         ,RelationshipSatisfaction = as.factor(if_else(RelationshipSatisfaction == 1, "Low",if_else(RelationshipSatisfaction == 2, "Medium", if_else(RelationshipSatisfaction == 3, "High", "Very High"))))
+         ,WorkLifeBalance = as.factor(if_else(WorkLifeBalance == 1, "Bad",if_else(WorkLifeBalance == 2, "Good", if_else(WorkLifeBalance == 3, "Better", "Best"))))
+         ,JobLevel = as.factor(JobLevel)
+  ) %>%
+  select(-EmployeeCount, -EmployeeNumber, -Over18, -StandardHours, -StockOptionLevel, -JobLevel) %>%
+  mutate_at(a_factores,.funs = factor)
+
+```
+
+
+```{r, message=FALSE, warning=TRUE,include=FALSE}
+df[sapply(df, is.factor)] <- data.matrix(df[sapply(df, is.factor)]) 
+
+# Nuevamente revisamos el dataset a nivel descriptivo.
+summary(df)
+str(df)
+skim(df)
+
+```
+
+#### Calidad de datos: Análisis de nulos
+```{r, message=FALSE, warning=FALSE,include=TRUE}
+data.frame(colSums(is.na(df)))
+```
+
+#### Calidad de datos: Análisis de atípicos
+
+### Analizamos las que son de tipo numérico
+
+```{r, message=FALSE, warning=FALSE,include=TRUE}
+out <- function(variable){
+  t(t(head(sort(variable,decreasing = T),20))) #la doble traspuesta es un truco para que se visualice la salida, si no lo que crearía es una colección de dataframes que no se ven bien
+}
+lapply(df,function(x){
+  if(is.double(x)) out(x)
+})
+```
+
+### Analizamos las que son de tipo integer
+
+```{r, message=FALSE, warning=FALSE, results='hide',include=TRUE}
+out <- function(variable){
+  t(t(table(variable))) #la doble traspuesta es un truco para que se visualice la salida, si no lo que crearìa es una colección de dataframes que no se ven bien
+}
+lapply(df,function(x){
+  if(is.integer(x)) out(x)
+})
+```
+
+### Análisis longitudinal
+
+```{r, message=FALSE, warning=FALSE,include=TRUE}
+longi <- df %>% 
+  summarise_all(mean) %>% #calcular la media de cada variable
+  t() %>% #trasponerlo para tenerlo en una sola columna y leerlo mejor
+  as.data.frame() #reconvertirlo a dataframe porque t() lo pasa a matriz
+data.frame(variable = rownames(longi), media = longi$V1) %>% #crear un nuevo dataframe para poder ordenar por el nombre
+  arrange(desc(variable)) #ordenar por el nombre para tener la visión longitudinal
+```
+
+
+#### Análisis exploratorio de variables
+
+```{r, message=FALSE, warning=FALSE,include=TRUE}
+
+df %>%
+  select_if(is.integer) %>%
+  gather() %>%
+  ggplot(aes(value)) + geom_density() + facet_wrap(~key,scales='free') +
+  theme(axis.text=element_text(size=6))#esto es para cambiar el tamaño del texto del eje y que se lea bien
+
+#Hacemos análisis de correlaciones
+cor <- df %>%
+  select_if(is.integer) %>%
+  cor() %>% 
+  round(digits = 2)
+
+corrgram(cor,order=TRUE,lower.panel=panel.shade,upper.panel=panel.pie)
+
+corrplot(cor, type = "upper", order = "hclust", 
+         tl.col = "black", tl.srt = 45)
+
+```
+
+
+#### Terminar el procesamiento de los datos. 
+
+```{r, message=FALSE, warning=FALSE,include=TRUE} 
+#Codigicación de las variables categóricas
+dmy <- dummyVars(~., data = df[-2])
+trsf <- data.frame(predict(dmy, newdata = df[-2]))
+
+#Revisión de asimetría de los datos y tratamiento de los mismos (Skewness)
+
+trsf <- trsf %>%
+  mutate(Age = log(Age + 1)
+         ,DailyRate = log(DailyRate + 1)
+         ,DistanceFromHome = log(DistanceFromHome + 1)
+         ,HourlyRate = log(HourlyRate + 1)
+         ,MonthlyIncome = log(MonthlyIncome + 1)
+         ,MonthlyRate = log(MonthlyRate + 1)
+         ,NumCompaniesWorked = log(NumCompaniesWorked + 1)
+         ,PercentSalaryHike = log(PercentSalaryHike + 1)
+         ,TotalWorkingYears = log(TotalWorkingYears + 1)
+         ,TrainingTimesLastYear = log(TrainingTimesLastYear + 1)
+         ,YearsAtCompany = log(YearsAtCompany +1)
+         ,YearsInCurrentRole = log(YearsInCurrentRole + 1)
+         ,YearsSinceLastPromotion = log(YearsSinceLastPromotion + 1)
+         ,YearsWithCurrManager = log(YearsWithCurrManager + 1))
+
+prep_num = preProcess(trsf, method=c("center", "scale"))
+final_df = predict(prep_num, trsf)
+
+# Se establece el dataset final.
+final_df <- cbind(trsf, df[2])
+final_df <- final_df %>%
+  mutate(Attrition = if_else(Attrition == 2,1,0)) 
+
+# Para ver la distribición de los datos de mi variable a predecir. 
+table(final_df$Attrition)
+
+```
+
+#### Metodos de seleccion de variables (aplicamos boruta Boruta)
+https://www.datacamp.com/community/tutorials/feature-selection-R-boruta
+
+```{r, message=FALSE, warning=FALSE,include=TRUE} 
+
+set.seed(1)
+dfboruta <- Boruta(Attrition ~ ., data = final_df, doTrace = 2, ntree = 100)
+print(dfboruta)
+
+dfboruta2 <- TentativeRoughFix(dfboruta)
+print(dfboruta2)
+
+plot(dfboruta2, xlab = "", xaxt = "n")
+lz<-lapply(1:ncol(dfboruta2$ImpHistory),function(i)
+dfboruta2$ImpHistory[is.finite(dfboruta2$ImpHistory[,i]),i])
+names(lz) <- colnames(dfboruta2$ImpHistory)
+Labels <- sort(sapply(lz,median))
+axis(side = 1,las=2,labels = names(Labels),
+at = 1:ncol(dfboruta2$ImpHistory), cex.axis = 0.7)
+
+getSelectedAttributes(dfboruta2, withTentative = F)
+
+
+```
+
+### Boruta 
+
+```{r, message=FALSE, warning=FALSE,include=TRUE}
+
+boruta3 <- attStats(dfboruta2)
+print(boruta3)
+
+
+```
+
+#### Selección de las variables finales para el modelo
+
+```{r, message=FALSE, warning=FALSE,include=TRUE}
+
+final_df <- final_df %>%
+  select(Age, JobSatisfaction, Department, EnvironmentSatisfaction, JobRole, MaritalStatus, MonthlyIncome, NumCompaniesWorked, OverTime, TotalWorkingYears, WorkLifeBalance, YearsAtCompany, YearsInCurrentRole, YearsSinceLastPromotion, YearsWithCurrManager, Attrition)
+final_df$Attrition = factor ( final_df$Attrition)
+
+```
+
+
+#### Definición de dataset de testeo y entrenamiento
+
+```{r, message=FALSE, warning=FALSE,include=TRUE}
+
+#Selección de dataset de entrenamiento y testeo
+
+set.seed(1)
+index <- createDataPartition(final_df[,1], p=0.75, list = FALSE)
+train <- final_df[index,]
+test <- final_df[-index,]
+
+str(train)
+
+prop.table(table(train$Attrition))
+prop.table(table(test$Attrition))
+
+```
+
+##### Aplicación de algoritmos
+#### Aplicación del algoritmo Random Forest
+
+```{r, message=FALSE, warning=FALSE,include=TRUE}
+set.seed(1)
+forest <- randomForest(Attrition ~ .,data=train,importance=TRUE)
+predictionsrf <- predict(forest, newdata = test)
+confusionMatrix(predictionsrf,test$Attrition)
+
+importance(forest)
+
+```
+
+### ROC AUC para Random Forest
+
+```{r results='hold'}
+set.seed(1)
+ROCRpred <- prediction(as.numeric(predictionsrf), as.numeric(test$Attrition))
+ROCRpref <- performance(ROCRpred,"auc")
+auc_rf <- as.numeric(ROCRpref@y.values)
+perf_ROC <- performance(ROCRpred,"tpr","fpr") #plot the actual ROC curve
+plot(perf_ROC, main="ROC plot")
+text(0.5,0.5,paste("AUC = ",format(auc_rf, digits=5, scientific=FALSE)))
+
+```
+
+#### Aplicación del algoritmo Decision tree
+
+```{r, message=FALSE, warning=FALSE,include=TRUE}
+
+set.seed(1)
+arbol <- rpart(Attrition ~ ., data=train,method = "class") ### En Method se tiene que especificar, porque por defecto deja Gini ###
+plot(arbol,uniform=T,margin=0.2)
+text (arbol, use.n = T, pretty = TRUE)
+title("Training Set's Classification Tree")
+
+#evaluar en conjunto de prueba---------------------------------------------
+predictionsar <- predict(arbol, test, type="class")
+
+#matriz de confusion-------------------------------------------------------
+confusionMatrix(predictionsar,test$Attrition)
+
+
+```
+
+### ROC AUC para Decision tree
+
+```{r, message=FALSE, warning=FALSE,include=TRUE}
+
+set.seed(1)
+plotcp(arbol)
+ROCRpred <- prediction(as.numeric(predictionsar), as.numeric(test$Attrition))
+ROCRpref <- performance(ROCRpred,"auc")
+auc_dt <- as.numeric(ROCRpref@y.values)
+perf_ROC <- performance(ROCRpred,"tpr","fpr") #plot the actual ROC curve
+plot(perf_ROC, main="ROC plot")
+text(0.5,0.5,paste("AUC = ",format(auc_dt, digits=5, scientific=FALSE)))
+
+```
+
+
+
+#### Aplicación del algoritmo Support vector machine
+
+```{r, message=FALSE, warning=FALSE,include=TRUE}
+set.seed(1)
+svm <- ksvm(Attrition ~ ., data = train, kernel = "vanilladot", cross=10)
+
+#evaluar en conjunto de prueba---------------------------------------------
+predictionssvm <- predict(svm, test)
+
+#matriz de confusion-------------------------------------------------------
+confusionMatrix(predictionssvm,test$Attrition)
+
+
+```
+
+### ROC AUC para SVM
+
+```{r, message=FALSE, warning=FALSE,include=TRUE}
+
+set.seed(1)
+ROCRpred <- prediction(as.numeric(predictionssvm), as.numeric(test$Attrition))
+ROCRpref <- performance(ROCRpred,"auc")
+auc_rf <- as.numeric(ROCRpref@y.values)
+perf_ROC <- performance(ROCRpred,"tpr","fpr") #plot the actual ROC curve
+plot(perf_ROC, main="ROC plot")
+text(0.5,0.5,paste("AUC = ",format(auc_rf, digits=5, scientific=FALSE)))
+
+```
+
+#### Aplicación del algoritmo Xtreme Gradient Boosting
+
+```{r, message=FALSE, warning=FALSE,include=TRUE}
+set.seed(1)
+control <- trainControl(method="repeatedcv", number=5)
+xgb <- train(Attrition~., data=train, method="xgbTree",  trControl=control)
+
+#evaluar en conjunto de prueba---------------------------------------------
+predictionsxgb <- predict(xgb, test)
+
+#matriz de confusion-------------------------------------------------------
+confusionMatrix(predictionsxgb,test$Attrition)
+
+```
+
+### ROC AUC para XGB
+
+```{r, message=FALSE, warning=FALSE,include=TRUE}
+
+set.seed(1)
+ROCRpred <- prediction(as.numeric(predictionsxgb), as.numeric(test$Attrition))
+ROCRpref <- performance(ROCRpred,"auc")
+auc_xgb <- as.numeric(ROCRpref@y.values)
+perf_ROC <- performance(ROCRpred,"tpr","fpr") #plot the actual ROC curve
+plot(perf_ROC, main="ROC plot")
+text(0.5,0.5,paste("AUC = ",format(auc_xgb, digits=5, scientific=FALSE)))
+
+```
+
+#### Aplicación del algoritmo Regresión Logística
+
+```{r, message=FALSE, warning=FALSE,include=TRUE}
+set.seed(1)
+control <- trainControl(method="repeatedcv", number=5)
+lr <- train(Attrition~., data=train, method="glm", trControl=control)
+
+#evaluar en conjunto de prueba---------------------------------------------
+predictionslr <- predict(lr, test)
+
+#matriz de confusion-------------------------------------------------------
+confusionMatrix(predictionslr,test$Attrition)
+
+```
+
+### ROC AUC para la Regresión logística
+
+```{r, message=FALSE, warning=FALSE,include=TRUE}
+
+set.seed(1)
+ROCRpred <- prediction(as.numeric(predictionslr), as.numeric(test$Attrition))
+ROCRpref <- performance(ROCRpred,"auc")
+auc_lr <- as.numeric(ROCRpref@y.values)
+perf_ROC <- performance(ROCRpred,"tpr","fpr") #plot the actual ROC curve
+plot(perf_ROC, main="ROC plot")
+text(0.5,0.5,paste("AUC = ",format(auc_lr, digits=5, scientific=FALSE)))
+
+```
+
+
+##### Comparación de modelos
+
+```{r, message=FALSE, warning=FALSE,include=TRUE}
+
+# Tabulating accuracies
+Model <- c('Random Forest','Decision tree','SVM-vanilladot', 'XGB', 'Logistic Regresion')
+Accuracy <- c(86.89,84.43,84.97,86.34,83.61)
+AUC <- c(61.60,60.15,57.48,64.27,58.92)
+mytable<- data.frame(Model, Accuracy, AUC)
+head(mytable)
+
+```
+
+
+##### Implementación y prueba
+
+```{r, message=FALSE, warning=FALSE,include=TRUE}
+set.seed(1)
+implementa <- fread('implementación2020.csv') ### cargar el nuevo dataset
+
+a_factores2 <- c('Attrition', 'BusinessTravel', 'Department', 'EducationField', 
+                'Gender','JobRole', 
+                'MaritalStatus','OverTime')
+
+#Editamos el dataset con el objetivo de categorizar bien las variables.
+implementa <- implementa %>%
+  mutate(Education = as.factor(if_else(Education == 1,"Below College", if_else(Education == 2, "College", if_else(Education == 3, "Bachelor", if_else(Education == 4, "Master","Doctor")))))
+         ,EnvironmentSatisfaction = as.factor(if_else(EnvironmentSatisfaction == 1,"Low",if_else(EnvironmentSatisfaction == 2, "Medium", if_else(EnvironmentSatisfaction == 3, "High", "Very High"))))
+         ,JobInvolvement = as.factor(if_else(JobInvolvement == 1,"Low",if_else(JobInvolvement == 2, "Medium",if_else(JobInvolvement == 3, "High", "Very High"))))
+         ,JobSatisfaction = as.factor(if_else(JobSatisfaction == 1, "Low",if_else(JobSatisfaction == 2, "Medium",if_else(JobSatisfaction == 3, "High","Very High"))))
+         ,PerformanceRating = as.factor(if_else(PerformanceRating == 1, "Low",if_else(PerformanceRating == 2, "Good", if_else(PerformanceRating == 3, "Excellent", "Outstanding"))))
+         ,RelationshipSatisfaction = as.factor(if_else(RelationshipSatisfaction == 1, "Low",if_else(RelationshipSatisfaction == 2, "Medium", if_else(RelationshipSatisfaction == 3, "High", "Very High"))))
+         ,WorkLifeBalance = as.factor(if_else(WorkLifeBalance == 1, "Bad",if_else(WorkLifeBalance == 2, "Good", if_else(WorkLifeBalance == 3, "Better", "Best"))))
+         ,JobLevel = as.factor(JobLevel)
+  ) %>%
+  select(-EmployeeCount, -EmployeeNumber, -Over18, -StandardHours, -StockOptionLevel, -JobLevel) %>%
+  mutate_at(a_factores,.funs = factor)
+
+implementa[sapply(implementa, is.factor)] <- data.matrix(implementa[sapply(implementa, is.factor)]) #factorised features
+
+summary(implementa)
+
+#Codificación de variables categóricas
+dmy2 <- dummyVars(~., data = implementa[-2])
+trsf2 <- data.frame(predict(dmy2, newdata = implementa[-2]))
+
+#Removing Skewness
+
+trsf2 <- trsf2%>%
+  mutate(Age = log(Age + 1)
+         ,DailyRate = log(DailyRate + 1)
+         ,DistanceFromHome = log(DistanceFromHome + 1)
+         ,HourlyRate = log(HourlyRate + 1)
+         ,MonthlyIncome = log(MonthlyIncome + 1)
+         ,MonthlyRate = log(MonthlyRate + 1)
+         ,NumCompaniesWorked = log(NumCompaniesWorked + 1)
+         ,PercentSalaryHike = log(PercentSalaryHike + 1)
+         ,TotalWorkingYears = log(TotalWorkingYears + 1)
+         ,TrainingTimesLastYear = log(TrainingTimesLastYear + 1)
+         ,YearsAtCompany = log(YearsAtCompany +1)
+         ,YearsInCurrentRole = log(YearsInCurrentRole + 1)
+         ,YearsSinceLastPromotion = log(YearsSinceLastPromotion + 1)
+         ,YearsWithCurrManager = log(YearsWithCurrManager + 1))
+
+prep_num2 = preProcess(trsf2, method=c("center", "scale"))
+final_implementa = predict(prep_num2, trsf2)
+
+# Se establece el dataset final.
+final_implementa <- cbind(trsf2, implementa[2])
+final_implementa <- final_implementa %>%
+  mutate(Attrition = if_else(Attrition == 1,1,0)) 
+
+# Para ver la distribición de los datos de mi variable a predecir. 
+table(final_implementa$Attrition)
+
+# Selección de variables
+final_implementa <- final_implementa %>%
+  select(Age, JobSatisfaction, Department, EnvironmentSatisfaction, JobRole, MaritalStatus, MonthlyIncome, NumCompaniesWorked, OverTime, TotalWorkingYears, WorkLifeBalance, YearsAtCompany, YearsInCurrentRole, YearsSinceLastPromotion, YearsWithCurrManager, Attrition)
+final_implementa$Attrition = factor ( final_implementa$Attrition)
+
+#Predecir con 30 datos aleatoreos.Todos verdaderos positivos, es decir, que dejaron la compañia. 
+#Vamos a utilizar el modelo generado Random Forest para ver el poder predictivo del modelo 
+
+set.seed(1)
+final_implementa$Predicted<-predict(forest,final_implementa)
+
+resultado <- subset(final_implementa, Predicted == 1)
+
+head(resultado)
+
+
+```
+
+
+
+
+
+
+
+
+
+#### Fuente: 
+https://www.Kaggle.com 
+https://www.r-bloggers.com/2019/07/customer-segmentation-using-rfm-analysis/
+https://www.unica360.com/analisis-rfm-en-retail-empezando-a-segmentar-clientes-i
+https://www.business-science.io/business/2016/08/07/CustomerSegmentationPt1.html
+https://uc-r.github.io/hc_clustering
+
